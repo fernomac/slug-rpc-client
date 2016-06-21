@@ -38,7 +38,7 @@ public class RpcClientTest {
                 writer.print("Content-Type: application/json\r\n");
                 writer.print("Connection: close\r\n");
                 writer.print("\r\n");
-                writer.print("{\"tags\":[\"abc\",\"def\"]}");
+                writer.print("{\"result\":{\"tags\":[\"abc\",\"def\"]}}");
                 sock.shutdownOutput();
 
                 while (true) {
