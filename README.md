@@ -1,7 +1,7 @@
 The Slug RPC Client is a little framework for talking to (some)
 [JSON-RPC](http://www.jsonrpc.org/) over HTTP services.
 
-== Defining a Service Interface
+## Defining a Service Interface
 
 To begin, define an interface representing the service. Each method on the
 interface should accept zero or one arguments and return zero or one
@@ -20,7 +20,7 @@ public interface MySweetService {
 }
 ```
 
-== Creating a Client
+## Creating a Client
 
 Next use the `RpcClientBuilder` to create an instance of your interface
 hooked up to a particular endpoint.
@@ -36,7 +36,7 @@ Calling methods on the returned `service` object will issue HTTP POST requests
 to the provided endpoint with a JSON-RPC 2.0 request object in the payload
 and attempt to parse a JSON-RPC 2.0 response object from the response payload.
 
-== Some Details
+## Some Details
 
 - The name of the interface method is taken to be the name of the remote
 procedure to call. I might look into an annotation to override that, but
