@@ -54,15 +54,19 @@ public class RpcClientTest {
             }
         }).start();
 
-        String uri = "http://localhost:" + srv.getLocalPort() + "/test";
-        TestService service = new RpcClientBuilder<>(TestService.class, uri)
-                .build();
+        try (RpcClient<TestService> client = new RpcClient.Builder()
+                .withEndpoint("http://localhost:" + srv.getLocalPort() + "/test")
+                .build(TestService.class)) {
 
-        TestOutput output = service.test(new TestInput()
-                .setName("David")
-                .setAge(12345));
+            TestService service = client.service();
 
-        System.out.println(output.getTags());
+            TestOutput output = service.test(new TestInput()
+                    .setName("David")
+                    .setAge(12345));
+
+            System.out.println(output.getTags());
+        }
+
         srv.close();
     }
 

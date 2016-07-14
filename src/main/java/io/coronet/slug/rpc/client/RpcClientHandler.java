@@ -3,15 +3,19 @@ package io.coronet.slug.rpc.client;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Type;
-import java.net.HttpURLConnection;
-import java.net.URL;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.concurrent.ThreadLocalRandom;
+
+import org.apache.http.client.config.RequestConfig;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.entity.ByteArrayEntity;
+import org.apache.http.impl.client.CloseableHttpClient;
 
 import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -24,12 +28,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  */
 final class RpcClientHandler implements InvocationHandler {
 
-    private final URL endpoint;
+    private final CloseableHttpClient client;
     private final ObjectMapper mapper;
+    private final URI endpoint;
 
-    RpcClientHandler(RpcClientBuilder<?> builder) {
-        this.endpoint = builder.getEndpoint();
+    RpcClientHandler(RpcClient.Builder builder) {
+        this.client = builder.getClient();
         this.mapper = builder.getMapper();
+        this.endpoint = builder.getEndpoint();
     }
 
     @Override
@@ -47,7 +53,18 @@ final class RpcClientHandler implements InvocationHandler {
         }
 
         try {
-            return doInvoke(proxy, method, args[0]);
+            return doInvoke(proxy, method, args.length == 0 ? null : args[0]);
+        } catch (IOException e) {
+            throw new TransportException(e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Closes the underlying HTTP client.
+     */
+    public void close() {
+        try {
+            client.close();
         } catch (IOException e) {
             throw new TransportException(e.getMessage(), e);
         }
@@ -58,61 +75,60 @@ final class RpcClientHandler implements InvocationHandler {
 
         byte[] payload = serialize(method.getName(), arg);
 
-        HttpURLConnection conn = (HttpURLConnection) endpoint.openConnection();
+        HttpPost post = new HttpPost(endpoint);
 
-        conn.setDoOutput(true);
-        conn.setRequestMethod("POST");
-        conn.setFixedLengthStreamingMode(payload.length);
+        post.setHeader("User-Agent", "Slug-Rpc-Client");
+        post.setHeader("Content-Type", "application/json-rpc");
+        post.setHeader("Accept", "application/json-rpc");
 
-        // TODO: Include more client version information?
-        conn.setRequestProperty("User-Agent", "Slug-RPC-Client");
-        conn.setRequestProperty("Content-Type", "application/json-rpc");
-        conn.setRequestProperty("Accept", "application/json-rpc");
+        post.setEntity(new ByteArrayEntity(payload));
 
         // TODO: Authentication.
 
         // TODO: Configurable timeouts.
-        conn.setConnectTimeout(5000);
-        conn.setReadTimeout(5000);
+        post.setConfig(RequestConfig.custom()
+                .setConnectionRequestTimeout(5000)
+                .setConnectTimeout(5000)
+                .setSocketTimeout(5000)
+                .build());
 
-        try (OutputStream out = conn.getOutputStream()) {
-            out.write(payload);
-        }
+        try (CloseableHttpResponse resp = client.execute(post)) {
+            byte[] content = buffer(resp.getEntity().getContent());
+            JsonNode response = parse(content);
 
-        byte[] content = buffer(conn.getInputStream());
-        JsonNode response = parse(content);
+            JsonNode error = response.get("error");
+            if (error != null) {
+                if (!error.isObject()) {
+                    throw new ProtocolException(
+                            "Error parsing response: 'error' is not an object",
+                            content);
+                }
 
-        JsonNode error = response.get("error");
-        if (error != null) {
-            if (!error.isObject()) {
-                throw new ProtocolException(
-                        "Error parsing response: 'error' is not an object",
-                        content);
+                int code = getCode(error);
+                String message = getMessage(error, content);
+                Object data = getData(code, error);
+
+                throw new RpcClientException(code, message, data);
             }
 
-            int code = getCode(error);
-            String message = getMessage(error, content);
-            Object data = getData(code, error);
+            JsonNode result = response.get("result");
+            if (result == null) {
+                // Hopefully void method?
+                return null;
+            }
 
-            throw new RpcClientException(code, message, data);
-        }
+            Type type = method.getGenericReturnType();
+            JavaType jtype = mapper.getTypeFactory().constructType(type);
 
-        JsonNode result = response.get("result");
-        if (result == null) {
-            // Hopefully void method?
-            return null;
-        }
-
-        Type type = method.getGenericReturnType();
-        JavaType jtype = mapper.getTypeFactory().constructType(type);
-
-        try {
-            return mapper.readValue(result.traverse(), jtype);
-        } catch (IOException e) {
-            throw new ProtocolException(
-                    "Error parsing result object " + result + " as a " + type,
-                    content,
-                    e);
+            try {
+                return mapper.readValue(result.traverse(), jtype);
+            } catch (IOException e) {
+                throw new ProtocolException(
+                        "Error parsing result object " + result + " as a "
+                                + type,
+                        content,
+                        e);
+            }
         }
     }
 
